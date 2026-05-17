@@ -1,0 +1,150 @@
+-- ============================================================
+-- SMART FARMING DATABASE - DDL
+-- ============================================================
+
+-- 1. USERS
+CREATE TABLE users (
+    user_id       SERIAL PRIMARY KEY,
+    full_name     VARCHAR(100) NOT NULL,
+    email         VARCHAR(150) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role          VARCHAR(50)  NOT NULL CHECK (role IN ('admin', 'farmer', 'technical_staff', 'customer')),
+    created_at    TIMESTAMP DEFAULT NOW()
+);
+
+-- 2. FARMS
+CREATE TABLE farms (
+    farm_id    SERIAL PRIMARY KEY,
+    farm_name  VARCHAR(100) NOT NULL,
+    location   VARCHAR(150) NOT NULL,
+    size       DECIMAL(10,2) NOT NULL CHECK (size > 0),
+    owner_id   INT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_farm_owner FOREIGN KEY (owner_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- 3. FIELDS
+CREATE TABLE fields (
+    field_id      SERIAL PRIMARY KEY,
+    field_name    VARCHAR(100) NOT NULL,
+    farm_id       INT NOT NULL,
+    soil_type     VARCHAR(50) CHECK (soil_type IN ('clay', 'sandy', 'loamy', 'silty', 'peaty')),
+    area_hectares DECIMAL(10,2) NOT NULL CHECK (area_hectares > 0),
+    CONSTRAINT fk_field_farm FOREIGN KEY (farm_id) REFERENCES farms(farm_id) ON DELETE CASCADE
+);
+
+-- 4. CROPS
+CREATE TABLE crops (
+    crop_id       SERIAL PRIMARY KEY,
+    crop_name     VARCHAR(100) NOT NULL,
+    field_id      INT NOT NULL,
+    status        VARCHAR(50) DEFAULT 'growing' CHECK (status IN ('growing', 'harvested', 'failed')),
+    planting_date DATE NOT NULL,
+    CONSTRAINT fk_crop_field FOREIGN KEY (field_id) REFERENCES fields(field_id) ON DELETE CASCADE
+);
+
+-- 5. HARVESTS
+CREATE TABLE harvests (
+    harvest_id   SERIAL PRIMARY KEY,
+    crop_id      INT NOT NULL,
+    harvested_by INT NOT NULL,
+    quantity_kg  DECIMAL(10,2) NOT NULL CHECK (quantity_kg > 0),
+    harvested_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_harvest_crop FOREIGN KEY (crop_id) REFERENCES crops(crop_id) ON DELETE CASCADE,
+    CONSTRAINT fk_harvest_user FOREIGN KEY (harvested_by) REFERENCES users(user_id)
+);
+
+-- 6. ORDERS
+CREATE TABLE orders (
+    order_id    SERIAL PRIMARY KEY,
+    customer_id INT NOT NULL,
+    status      VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'cancelled')),
+    order_date  DATE DEFAULT CURRENT_DATE,
+    CONSTRAINT fk_order_customer FOREIGN KEY (customer_id) REFERENCES users(user_id)
+);
+
+-- 7. ORDER ITEMS
+CREATE TABLE order_items (
+    order_item_id SERIAL PRIMARY KEY,
+    order_id      INT NOT NULL,
+    harvest_id    INT NOT NULL,
+    quantity_kg   DECIMAL(10,2) NOT NULL CHECK (quantity_kg > 0),
+    price         DECIMAL(10,2) NOT NULL CHECK (price >= 0),
+    CONSTRAINT fk_orderitem_order   FOREIGN KEY (order_id)   REFERENCES orders(order_id)   ON DELETE CASCADE,
+    CONSTRAINT fk_orderitem_harvest FOREIGN KEY (harvest_id) REFERENCES harvests(harvest_id)
+);
+
+-- 8. SENSORS
+CREATE TABLE sensors (
+    sensor_id    SERIAL PRIMARY KEY,
+    field_id     INT NOT NULL,
+    sensor_type  VARCHAR(50) NOT NULL CHECK (sensor_type IN ('soil_moisture', 'temperature', 'humidity')),
+    installed_by INT NOT NULL,
+    installed_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_sensor_field     FOREIGN KEY (field_id)     REFERENCES fields(field_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sensor_installer FOREIGN KEY (installed_by) REFERENCES users(user_id)
+);
+
+-- 9. SENSOR READINGS
+CREATE TABLE sensor_readings (
+    reading_id  SERIAL PRIMARY KEY,
+    sensor_id   INT NOT NULL,
+    value       DECIMAL(10,2) NOT NULL,
+    recorded_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_reading_sensor FOREIGN KEY (sensor_id) REFERENCES sensors(sensor_id) ON DELETE CASCADE
+);
+
+-- 10. ALERTS
+CREATE TABLE alerts (
+    alert_id     SERIAL PRIMARY KEY,
+    field_id     INT NOT NULL,
+    reading_id   INT,
+    alert_type   VARCHAR(100) NOT NULL,
+    alert_status VARCHAR(50) DEFAULT 'active' CHECK (alert_status IN ('active', 'resolved', 'ignored')),
+    created_at   TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_alert_field   FOREIGN KEY (field_id)   REFERENCES fields(field_id) ON DELETE CASCADE,
+    CONSTRAINT fk_alert_reading FOREIGN KEY (reading_id) REFERENCES sensor_readings(reading_id) ON DELETE SET NULL
+);
+
+-- 11. ACTUATORS
+CREATE TABLE actuators (
+    actuator_id       SERIAL PRIMARY KEY,
+    field_id          INT NOT NULL,
+    actuator_type     VARCHAR(100) NOT NULL,
+    actuator_status   VARCHAR(50) DEFAULT 'active' CHECK (actuator_status IN ('active', 'inactive', 'maintenance')),
+    installation_date DATE DEFAULT CURRENT_DATE,
+    CONSTRAINT fk_actuator_field FOREIGN KEY (field_id) REFERENCES fields(field_id) ON DELETE CASCADE
+);
+
+-- 12. ACTUATOR ACTIONS
+CREATE TABLE actuator_actions (
+    action_id    SERIAL PRIMARY KEY,
+    actuator_id  INT NOT NULL,
+    start_time   TIMESTAMP NOT NULL,
+    end_time     TIMESTAMP,
+    CONSTRAINT fk_action_actuator FOREIGN KEY (actuator_id) REFERENCES actuators(actuator_id) ON DELETE CASCADE,
+    CONSTRAINT chk_action_times CHECK (end_time IS NULL OR end_time > start_time)
+);
+
+-- 13. IRRIGATION
+CREATE TABLE irrigation (
+    irrigation_id SERIAL PRIMARY KEY,
+    action_id     INT NOT NULL UNIQUE,
+    field_id      INT NOT NULL,
+    method        VARCHAR(100) CHECK (method IN ('drip', 'sprinkler', 'flood', 'manual')),
+    water_amount  DECIMAL(10,2) CHECK (water_amount > 0),
+    CONSTRAINT fk_irrigation_action FOREIGN KEY (action_id) REFERENCES actuator_actions(action_id) ON DELETE CASCADE,
+    CONSTRAINT fk_irrigation_field  FOREIGN KEY (field_id)  REFERENCES fields(field_id)
+);
+
+--14. NOTIFICATIONS TABLE
+CREATE TABLE notifications (
+    notification_id SERIAL PRIMARY KEY,
+    admin_id        INT NOT NULL,
+    triggered_by    INT NOT NULL,
+    message         TEXT NOT NULL,
+    is_read         BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_notif_admin       FOREIGN KEY (admin_id)      REFERENCES users(user_id),
+    CONSTRAINT fk_notif_triggered   FOREIGN KEY (triggered_by)  REFERENCES users(user_id)
+);

@@ -1,0 +1,360 @@
+--FUNCTIONS:
+
+--1/ Calculates total harvested quantity for a specific crop
+CREATE OR REPLACE FUNCTION fn_total_harvest(p_crop_id NUMBER)
+RETURN NUMBER
+IS
+    v_total NUMBER;
+BEGIN
+    SELECT NVL(SUM(quantity_kg),0)
+    INTO v_total
+    FROM harvests
+    WHERE crop_id = p_crop_id;
+
+    RETURN v_total;
+END;
+
+
+-- 2/Measures irrigation efficiency (harvest per water usage)
+CREATE OR REPLACE FUNCTION fn_water_efficiency(p_field_id NUMBER)
+RETURN NUMBER
+IS
+    v_water NUMBER;
+    v_harvest NUMBER;
+BEGIN
+
+    SELECT NVL(SUM(water_amount),0)
+    INTO v_water
+    FROM irrigation
+    WHERE field_id = p_field_id;
+
+    SELECT NVL(SUM(h.quantity_kg),0)
+    INTO v_harvest
+    FROM harvests h
+    JOIN crops c ON h.crop_id = c.crop_id
+    WHERE c.field_id = p_field_id;
+
+    IF v_water = 0 THEN
+        RETURN 0;
+    END IF;
+
+    RETURN ROUND(v_harvest / v_water, 2);
+END; 
+
+-- 3/Calculates total cost of an order (financial calculation)
+CREATE OR REPLACE FUNCTION fn_order_total(p_order_id NUMBER)
+RETURN NUMBER
+IS
+    v_total NUMBER;
+BEGIN
+    SELECT SUM(quantity_kg * price)
+    INTO v_total
+    FROM order_items
+    WHERE order_id = p_order_id;
+
+    RETURN NVL(v_total,0);
+END;
+
+--4/ Returns simple stability status based on sensor value variation
+CREATE OR REPLACE FUNCTION fn_sensor_stability(p_sensor_id NUMBER)
+RETURN VARCHAR2
+IS
+    v_max NUMBER;
+    v_min NUMBER;
+BEGIN
+    -- Get max and min readings
+    SELECT MAX(value), MIN(value)
+    INTO v_max, v_min
+    FROM sensor_readings
+    WHERE sensor_id = p_sensor_id;
+
+    -- Simple classification logic
+    IF (v_max - v_min) <= 10 THEN
+        RETURN 'STABLE';
+    ELSIF (v_max - v_min) <= 30 THEN
+        RETURN 'MODERATE';
+    ELSE
+        RETURN 'UNSTABLE';
+    END IF;
+END;
+
+--5/ Returns total number of alerts in the system
+CREATE OR REPLACE FUNCTION fn_alert_count
+RETURN NUMBER
+IS
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM alerts;
+    RETURN v_count;
+END;
+
+
+---------------------------------------------------------------------
+--PROCEDURES : 
+
+--1/ Activates irrigation system for a field
+CREATE OR REPLACE PROCEDURE sp_start_irrigation(
+    p_field_id NUMBER,
+    p_actuator_id NUMBER,
+    p_water_amount NUMBER
+)
+IS
+BEGIN
+    INSERT INTO irrigation(field_id, actuator_id, water_amount, start_time)
+    VALUES (p_field_id, p_actuator_id, p_water_amount, SYSDATE);
+
+    COMMIT;
+END;
+
+
+--2/ Creates a new order for a customer
+CREATE PROCEDURE sp_place_order(p_customer_id NUMBER)
+AS
+BEGIN
+    INSERT INTO orders(customer_id, status, order_date)
+    VALUES (p_customer_id, 'pending', SYSDATE);
+
+    COMMIT;
+END;
+
+--3/ Manually inserts an alert into system monitoring table
+CREATE PROCEDURE sp_create_alert(p_reading_id NUMBER, p_type VARCHAR2)
+AS
+BEGIN
+    INSERT INTO alerts(reading_id, alert_type, alert_status)
+    VALUES (p_reading_id, p_type, 'active');
+END;
+
+
+----------------------------------------------------------------------
+--VIEWS:
+
+--1/ Provides complete farm production summary (fields, crops, harvest)
+CREATE VIEW vw_farm_production AS
+SELECT 
+    f.farm_name,
+    SUM(h.quantity_kg) AS total_harvest
+FROM farms f
+JOIN fields fi ON f.farm_id = fi.farm_id
+JOIN crops c ON fi.field_id = c.field_id
+JOIN harvests h ON c.crop_id = h.crop_id
+GROUP BY f.farm_name;
+
+
+-- 2/Shows only active system alerts for real-time monitoring
+CREATE VIEW vw_active_alerts AS
+SELECT *
+FROM alerts
+WHERE alert_status = 'active';
+
+
+--3/ Displays latest sensor readings for monitoring environmental conditions
+CREATE VIEW vw_sensor_status AS
+SELECT 
+    s.sensor_id,
+    s.sensor_type,
+    sr.value,
+    sr.recorded_at
+FROM sensors s
+JOIN sensor_readings sr ON s.sensor_id = sr.sensor_id;
+
+
+-- 4/Shows irrigation usage summary per field
+CREATE VIEW vw_irrigation_summary AS
+SELECT 
+    field_id,
+    SUM(water_amount) AS total_water_used,
+    COUNT(*) AS irrigation_sessions
+FROM irrigation
+GROUP BY field_id;
+
+-------------------------------------------------------------
+--TRIGGERS :
+--1/ Automatically creates alert when sensor value exceeds safe limit
+CREATE TRIGGER trg_sensor_alert
+AFTER INSERT ON sensor_readings
+FOR EACH ROW
+BEGIN
+    IF :NEW.value > 80 THEN
+        INSERT INTO alerts(reading_id, alert_type, alert_status)
+        VALUES (:NEW.reading_id, 'HIGH', 'active');
+    END IF;
+END;
+
+
+--2/ Automatically updates crop status after harvesting
+CREATE TRIGGER trg_crop_update
+AFTER INSERT ON harvests
+FOR EACH ROW
+BEGIN
+    UPDATE crops
+    SET status = 'harvested'
+    WHERE crop_id = :NEW.crop_id;
+END;
+
+
+--3/ Automatically starts irrigation when soil moisture is too low
+CREATE TRIGGER trg_auto_irrigation
+AFTER INSERT ON sensor_readings
+FOR EACH ROW
+BEGIN
+    IF :NEW.value < 20 THEN
+        INSERT INTO irrigation(field_id, actuator_id, water_amount, start_time)
+        VALUES (1, 1, 50, SYSDATE);
+    END IF;
+END;
+
+----------------------------------------------------
+--COMPLEX QUERIES:
+
+-- Shows crop productivity using stored function
+SELECT 
+    crop_name,
+    fn_total_harvest(crop_id) AS total_harvest
+FROM crops;
+
+
+-- Calculates total order value using function
+SELECT 
+    order_id,
+    fn_order_total(order_id) AS total_amount
+FROM orders;
+
+
+-- Ranks farms based on total harvested production using aggregation
+SELECT 
+    f.farm_name,
+    SUM(h.quantity_kg) AS total_harvest,
+    RANK() OVER (ORDER BY SUM(h.quantity_kg) DESC) AS farm_rank
+FROM farms f
+JOIN fields fi ON f.farm_id = fi.farm_id
+JOIN crops c ON fi.field_id = c.field_id
+JOIN harvests h ON c.crop_id = h.crop_id
+GROUP BY f.farm_name; 
+
+
+-- Combines sensor readings with stability function
+SELECT 
+    s.sensor_id,
+    s.sensor_type,
+    fn_sensor_stability(s.sensor_id) AS stability_status,
+    COUNT(sr.reading_id) AS total_readings
+FROM sensors s
+JOIN sensor_readings sr ON s.sensor_id = sr.sensor_id
+GROUP BY s.sensor_id, s.sensor_type;
+
+
+
+-- Shows which fields generate the most alerts (trigger-generated data analysis)
+SELECT 
+    f.field_name,
+    COUNT(a.alert_id) AS total_alerts
+FROM fields f
+JOIN sensors s ON f.field_id = s.field_id
+JOIN sensor_readings sr ON s.sensor_id = sr.sensor_id
+JOIN alerts a ON sr.reading_id = a.reading_id
+GROUP BY f.field_name
+HAVING COUNT(a.alert_id) > (
+    SELECT AVG(alert_count)
+    FROM (
+        SELECT COUNT(*) AS alert_count
+        FROM alerts
+        GROUP BY reading_id
+    )
+);
+
+-- Combines farms, crops, and harvests using function-based analysis
+SELECT 
+    f.farm_name,
+    fn_total_harvest(c.crop_id) AS crop_harvest,
+    c.crop_name
+FROM farms f
+JOIN fields fi ON f.farm_id = fi.farm_id
+JOIN crops c ON fi.field_id = c.field_id;
+
+----------------------------------------------------
+--AUTHORIZATION & ROLES:
+
+-- Admin role has full system control (highest privilege)
+CREATE ROLE admin_role;
+GRANT ALL PRIVILEGES TO admin_role;
+
+-- Farmer can view crops and sensor data only (limited access)
+CREATE ROLE farmer_role;
+GRANT SELECT ON crops TO farmer_role;
+GRANT SELECT ON sensor_readings TO farmer_role;
+
+
+-- Technical staff manages sensors and alerts (system maintenance role)
+CREATE ROLE technical_role;
+GRANT SELECT, UPDATE ON sensors TO technical_role;
+GRANT SELECT, INSERT ON alerts TO technical_role;
+
+-- Customers can only view products and place orders
+CREATE ROLE customer_role;
+
+GRANT SELECT ON crops TO customer_role;
+GRANT SELECT ON vw_farm_production TO customer_role;
+GRANT INSERT ON orders TO customer_role;
+GRANT INSERT ON order_items TO customer_role;
+
+-- Analysts can only read system data for reporting purposes
+CREATE ROLE analyst_role;
+
+GRANT SELECT ON vw_farm_production TO analyst_role;
+GRANT SELECT ON vw_active_alerts TO analyst_role;
+GRANT SELECT ON vw_irrigation_summary TO analyst_role;
+GRANT SELECT ON orders TO analyst_role;
+
+
+
+-----------------------------------------------------------
+-- Safe transaction for placing an order
+BEGIN
+    SAVEPOINT start_order;
+
+    INSERT INTO orders(customer_id, status, order_date)
+    VALUES (1, 'pending', SYSDATE);
+
+    INSERT INTO order_items(order_id, quantity_kg, price)
+    VALUES (1, 10, 50);
+
+    COMMIT;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK TO start_order;
+END;
+
+
+-- Processes sensor readings one by one using cursor
+DECLARE
+    CURSOR c IS SELECT value FROM sensor_readings;
+    v_value NUMBER;
+BEGIN
+    OPEN c;
+
+    LOOP
+        FETCH c INTO v_value;
+        EXIT WHEN c%NOTFOUND;
+
+        IF v_value > 80 THEN
+            INSERT INTO alerts(alert_type, alert_status)
+            VALUES ('HIGH', 'active');
+        END IF;
+    END LOOP;
+
+    CLOSE c;
+END;
+
+
+-- Handles errors safely in PL/SQL
+BEGIN
+    NULL;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error occurred in system');
+END;
+
+

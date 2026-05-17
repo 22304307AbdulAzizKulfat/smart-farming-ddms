@@ -1,0 +1,111 @@
+-- ============================================================
+-- SMART FARMING DATABASE - ROLES & GRANTS
+-- CMPE344 | Cyprus International University
+-- ============================================================
+
+-- STEP 1: Create the roles
+CREATE ROLE admin_role;
+CREATE ROLE farmer_role;
+CREATE ROLE technical_role;
+CREATE ROLE customer_role;
+
+
+-- ============================================================
+-- STEP 2: ADMIN ROLE
+-- Full access to everything
+-- ============================================================
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO admin_role;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO admin_role;
+
+
+-- ============================================================
+-- STEP 3: FARMER ROLE
+-- Manages their own farms, fields, crops and harvests
+-- Can view sensors and alerts for their fields
+-- ============================================================
+
+-- Full access to farming tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON farms         TO farmer_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON fields        TO farmer_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON crops         TO farmer_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON harvests      TO farmer_role;
+
+-- Read only on monitoring tables
+GRANT SELECT ON sensors          TO farmer_role;
+GRANT SELECT ON sensor_readings  TO farmer_role;
+GRANT SELECT ON alerts           TO farmer_role;
+GRANT SELECT ON actuators        TO farmer_role;
+GRANT SELECT ON actuator_actions TO farmer_role;
+GRANT SELECT ON irrigation       TO farmer_role;
+
+-- No access to other users data
+GRANT SELECT ON users TO farmer_role;
+
+-- Allow sequences for INSERT operations
+GRANT USAGE, SELECT ON SEQUENCE farms_farm_id_seq        TO farmer_role;
+GRANT USAGE, SELECT ON SEQUENCE fields_field_id_seq      TO farmer_role;
+GRANT USAGE, SELECT ON SEQUENCE crops_crop_id_seq        TO farmer_role;
+GRANT USAGE, SELECT ON SEQUENCE harvests_harvest_id_seq  TO farmer_role;
+
+
+-- ============================================================
+-- STEP 4: TECHNICAL STAFF ROLE
+-- Manages sensors, readings, actuators, actions, irrigation
+-- Can view farms and fields but NOT modify them
+-- ============================================================
+
+-- Read only on farm structure
+GRANT SELECT ON farms   TO technical_role;
+GRANT SELECT ON fields  TO technical_role;
+GRANT SELECT ON crops   TO technical_role;
+GRANT SELECT ON users   TO technical_role;
+
+-- Full access to technical tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON sensors          TO technical_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON sensor_readings  TO technical_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON alerts           TO technical_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON actuators        TO technical_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON actuator_actions TO technical_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON irrigation       TO technical_role;
+
+-- No access to orders or harvests
+REVOKE ALL ON orders      FROM technical_role;
+REVOKE ALL ON order_items FROM technical_role;
+REVOKE ALL ON harvests    FROM technical_role;
+
+-- Allow sequences for INSERT operations
+GRANT USAGE, SELECT ON SEQUENCE sensors_sensor_id_seq                   TO technical_role;
+GRANT USAGE, SELECT ON SEQUENCE sensor_readings_reading_id_seq          TO technical_role;
+GRANT USAGE, SELECT ON SEQUENCE alerts_alert_id_seq                     TO technical_role;
+GRANT USAGE, SELECT ON SEQUENCE actuators_actuator_id_seq               TO technical_role;
+GRANT USAGE, SELECT ON SEQUENCE actuator_actions_action_id_seq          TO technical_role;
+GRANT USAGE, SELECT ON SEQUENCE irrigation_irrigation_id_seq            TO technical_role;
+
+
+-- ============================================================
+-- STEP 5: CUSTOMER ROLE
+-- Can browse farms, crops, harvests
+-- Can manage their own orders only
+-- ============================================================
+
+-- Read only on farming info
+GRANT SELECT ON farms    TO customer_role;
+GRANT SELECT ON fields   TO customer_role;
+GRANT SELECT ON crops    TO customer_role;
+GRANT SELECT ON harvests TO customer_role;
+
+-- Full access to orders
+GRANT SELECT, INSERT, UPDATE ON orders      TO customer_role;
+GRANT SELECT, INSERT, UPDATE ON order_items TO customer_role;
+
+-- No access to sensors, actuators, alerts or other users
+REVOKE ALL ON sensors          FROM customer_role;
+REVOKE ALL ON sensor_readings  FROM customer_role;
+REVOKE ALL ON alerts           FROM customer_role;
+REVOKE ALL ON actuators        FROM customer_role;
+REVOKE ALL ON actuator_actions FROM customer_role;
+REVOKE ALL ON irrigation       FROM customer_role;
+
+-- Allow sequences for INSERT operations
+GRANT USAGE, SELECT ON SEQUENCE orders_order_id_seq          TO customer_role;
+GRANT USAGE, SELECT ON SEQUENCE order_items_order_item_id_seq TO customer_role;

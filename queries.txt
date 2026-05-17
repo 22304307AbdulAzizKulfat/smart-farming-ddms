@@ -1,0 +1,133 @@
+-- QUERY 1: All users with role info
+-- Used in: Admin Dashboard
+SELECT
+    user_id,
+    full_name,
+    email,
+    role,
+    created_at
+FROM users
+ORDER BY role, full_name;
+
+-- QUERY 2: All farms with owner names and field count
+-- Used in: Admin + Farmer Dashboard
+SELECT
+    f.farm_id,
+    f.farm_name,
+    f.location,
+    f.size,
+    u.full_name AS owner_name,
+    COUNT(fi.field_id) AS total_fields
+FROM farms f
+JOIN users u ON f.owner_id = u.user_id
+LEFT JOIN fields fi ON f.farm_id = fi.farm_id
+GROUP BY f.farm_id, f.farm_name, f.location, f.size, u.full_name
+ORDER BY f.farm_id;
+
+-- QUERY 3: All crops with field and farm details
+-- Used in: Farmer Dashboard
+SELECT
+    c.crop_id,
+    c.crop_name,
+    c.status,
+    c.planting_date,
+    fi.field_name,
+    fi.soil_type,
+    fa.farm_name,
+    u.full_name AS farmer_name
+FROM crops c
+JOIN fields fi ON c.field_id = fi.field_id
+JOIN farms fa ON fi.farm_id = fa.farm_id
+JOIN users u ON fa.owner_id = u.user_id
+ORDER BY c.status, c.planting_date;
+
+-- QUERY 4: Average sensor readings per field per sensor type
+-- Used in: Farmer + Technical Dashboard
+SELECT
+    fi.field_name,
+    fa.farm_name,
+    s.sensor_type,
+    ROUND(AVG(sr.value)::NUMERIC, 2) AS avg_reading,
+    ROUND(MIN(sr.value)::NUMERIC, 2) AS min_reading,
+    ROUND(MAX(sr.value)::NUMERIC, 2) AS max_reading,
+    COUNT(sr.reading_id) AS total_readings
+FROM sensor_readings sr
+JOIN sensors s ON sr.sensor_id = s.sensor_id
+JOIN fields fi ON s.field_id = fi.field_id
+JOIN farms fa ON fi.farm_id = fa.farm_id
+GROUP BY fi.field_name, fa.farm_name, s.sensor_type
+ORDER BY fi.field_name, s.sensor_type;
+
+-- QUERY 5: Total harvest per farm with farmer name
+-- Used in: Admin + Farmer Dashboard
+SELECT
+    fa.farm_name,
+    u.full_name AS farmer_name,
+    COUNT(h.harvest_id) AS total_harvests,
+    SUM(h.quantity_kg) AS total_quantity_kg,
+    ROUND(AVG(h.quantity_kg)::NUMERIC, 2) AS avg_harvest_kg
+FROM harvests h
+JOIN crops c ON h.crop_id = c.crop_id
+JOIN fields fi ON c.field_id = fi.field_id
+JOIN farms fa ON fi.farm_id = fa.farm_id
+JOIN users u ON fa.owner_id = u.user_id
+GROUP BY fa.farm_name, u.full_name
+ORDER BY total_quantity_kg DESC;
+
+-- QUERY 6: All orders with customer and crop details
+-- Used in: Admin + Customer Dashboard
+SELECT
+    o.order_id,
+    u.full_name AS customer_name,
+    c.crop_name,
+    fa.farm_name,
+    oi.quantity_kg,
+    oi.price,
+    o.status AS order_status,
+    o.order_date
+FROM orders o
+JOIN users u ON o.customer_id = u.user_id
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN harvests h ON oi.harvest_id = h.harvest_id
+JOIN crops c ON h.crop_id = c.crop_id
+JOIN fields fi ON c.field_id = fi.field_id
+JOIN farms fa ON fi.farm_id = fa.farm_id
+ORDER BY o.order_date DESC;
+
+-- QUERY 7: Fields with no sensors installed
+-- Used in: Technical Dashboard
+SELECT
+    fi.field_id,
+    fi.field_name,
+    fi.soil_type,
+    fi.area_hectares,
+    fa.farm_name,
+    u.full_name AS owner_name
+FROM fields fi
+JOIN farms fa ON fi.farm_id = fa.farm_id
+JOIN users u ON fa.owner_id = u.user_id
+WHERE fi.field_id NOT IN (
+    SELECT DISTINCT field_id FROM sensors
+)
+ORDER BY fa.farm_name;
+
+
+
+
+ALTER TABLE users DISABLE ROW LEVEL SECURITY;
+ALTER TABLE farms DISABLE ROW LEVEL SECURITY;
+ALTER TABLE fields DISABLE ROW LEVEL SECURITY;
+ALTER TABLE crops DISABLE ROW LEVEL SECURITY;
+ALTER TABLE harvests DISABLE ROW LEVEL SECURITY;
+ALTER TABLE orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE order_items DISABLE ROW LEVEL SECURITY;
+ALTER TABLE sensors DISABLE ROW LEVEL SECURITY;
+ALTER TABLE sensor_readings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE alerts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE actuators DISABLE ROW LEVEL SECURITY;
+ALTER TABLE actuator_actions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE irrigation DISABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications DISABLE ROW LEVEL SECURITY;
+
+
+

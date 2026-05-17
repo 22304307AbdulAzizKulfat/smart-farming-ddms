@@ -1,0 +1,363 @@
+-- PROCEDURE 1: Add harvest + update crop status
+CREATE OR REPLACE PROCEDURE add_harvest(
+    p_crop_id       INT,
+    p_harvested_by  INT,
+    p_harvest_date  TIMESTAMP,
+    p_quantity_kg   DECIMAL
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO harvests (crop_id, harvested_by, quantity_kg, harvested_at)
+    VALUES (p_crop_id, p_harvested_by, p_quantity_kg, p_harvest_date);
+
+    UPDATE crops
+    SET status = 'harvested'
+    WHERE crop_id = p_crop_id;
+
+    RAISE NOTICE 'Harvest added for crop ID %', p_crop_id;
+END;
+$$;
+
+-- HOW TO CALL:
+CALL add_harvest(1, 2, NOW(), 4500.00);
+
+-- ─────────────────────────────────────────────────────────
+
+-- PROCEDURE: Cancel all pending orders for a customer
+CREATE OR REPLACE PROCEDURE cancel_customer_orders(
+    p_customer_id INT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count INT;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM orders
+    WHERE customer_id = p_customer_id
+    AND status = 'pending';
+
+    IF v_count = 0 THEN
+        RAISE NOTICE 'No pending orders for customer ID %', p_customer_id;
+    ELSE
+        UPDATE orders
+        SET status = 'cancelled'
+        WHERE customer_id = p_customer_id
+        AND status = 'pending';
+
+        RAISE NOTICE '% orders cancelled for customer ID %', v_count, p_customer_id;
+    END IF;
+END;
+$$;
+
+-- HOW TO CALL:
+CALL cancel_customer_orders(6);
+
+
+CREATE OR REPLACE PROCEDURE add_harvest(
+    p_crop_id       INT,
+    p_harvested_by  INT,
+    p_harvest_date  TIMESTAMP,
+    p_quantity_kg   DECIMAL
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO harvests (crop_id, harvested_by, quantity_kg, harvested_at)
+    VALUES (p_crop_id, p_harvested_by, p_quantity_kg, p_harvest_date);
+
+    UPDATE crops
+    SET status = 'harvested'
+    WHERE crop_id = p_crop_id;
+
+    RAISE NOTICE 'Harvest added for crop ID %', p_crop_id;
+END;
+$$;
+
+-- ─────────────────────────────────────────────────────────
+
+-- FUNCTION : Get total harvest quantity for a farm
+
+CREATE OR REPLACE FUNCTION get_farm_total_harvest(
+    p_farm_id INT
+)
+RETURNS DECIMAL
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_total DECIMAL := 0;
+BEGIN
+    SELECT COALESCE(SUM(h.quantity_kg), 0)
+    INTO v_total
+    FROM harvests h
+    JOIN crops c ON h.crop_id = c.crop_id
+    JOIN fields fi ON c.field_id = fi.field_id
+    WHERE fi.farm_id = p_farm_id;
+
+    RETURN v_total;
+END;
+$$;
+
+-- HOW TO CALL:
+SELECT get_farm_total_harvest(1) AS total_harvest_kg;
+
+-- ─────────────────────────────────────────────────────────
+
+-- FUNCTION : Get latest sensor reading for a sensor
+
+CREATE OR REPLACE FUNCTION get_latest_reading(
+    p_sensor_id INT
+)
+RETURNS DECIMAL
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_value DECIMAL;
+BEGIN
+    SELECT value INTO v_value
+    FROM sensor_readings
+    WHERE sensor_id = p_sensor_id
+    ORDER BY recorded_at DESC
+    LIMIT 1;
+
+    IF NOT FOUND THEN
+        RAISE NOTICE 'No readings for sensor ID %', p_sensor_id;
+        RETURN NULL;
+    END IF;
+
+    RETURN v_value;
+END;
+$$;
+
+-- HOW TO CALL:
+SELECT get_latest_reading(1) AS latest_value;
+
+-- ─────────────────────────────────────────────────────────
+
+-- FUNCTION 3: Get total active alerts count
+CREATE OR REPLACE FUNCTION get_active_alerts_count()
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count INT;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM alerts
+    WHERE alert_status = 'active';
+
+    RETURN v_count;
+END;
+$$;
+
+-- HOW TO CALL:
+SELECT get_active_alerts_count() AS active_alerts;
+
+--function 4 
+CREATE OR REPLACE FUNCTION get_latest_reading(p_sensor_id INT)
+RETURNS DECIMAL
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_value DECIMAL;
+BEGIN
+    SELECT value INTO v_value
+    FROM sensor_readings
+    WHERE sensor_id = p_sensor_id
+    ORDER BY recorded_at DESC
+    LIMIT 1;
+
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN v_value;
+END;
+$$;
+
+
+-- TRIGGER 1: Auto create alert when sensor reading is out of range
+CREATE OR REPLACE FUNCTION check_sensor_reading()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_sensor_type VARCHAR;
+    v_field_id    INT;
+    v_message     VARCHAR;
+BEGIN
+    SELECT sensor_type, field_id
+    INTO v_sensor_type, v_field_id
+    FROM sensors
+    WHERE sensor_id = NEW.sensor_id;
+
+    IF v_sensor_type = 'soil_moisture' AND NEW.value < 30 THEN
+        v_message := 'Low Soil Moisture - Below 30%';
+    ELSIF v_sensor_type = 'temperature' AND NEW.value > 35 THEN
+        v_message := 'High Temperature - Above 35°C';
+    ELSIF v_sensor_type = 'humidity' AND NEW.value > 75 THEN
+        v_message := 'High Humidity - Above 75%';
+    END IF;
+
+    IF v_message IS NOT NULL THEN
+        INSERT INTO alerts (field_id, reading_id, alert_type, alert_status)
+        VALUES (v_field_id, NEW.reading_id, v_message, 'active');
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trg_sensor_alert
+AFTER INSERT ON sensor_readings
+FOR EACH ROW
+EXECUTE FUNCTION check_sensor_reading();
+
+-- ─────────────────────────────────────────────────────────
+
+-- TRIGGER 2: Notify admin when farmer adds a harvest
+CREATE OR REPLACE FUNCTION notify_admin_harvest()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_farmer_name   VARCHAR;
+    v_admin_id      INT;
+    v_crop_name     VARCHAR;
+BEGIN
+    SELECT full_name INTO v_farmer_name
+    FROM users WHERE user_id = NEW.harvested_by;
+
+    SELECT crop_name INTO v_crop_name
+    FROM crops WHERE crop_id = NEW.crop_id;
+
+    FOR v_admin_id IN
+        SELECT user_id FROM users WHERE role = 'admin'
+    LOOP
+        INSERT INTO notifications (admin_id, triggered_by, message)
+        VALUES (
+            v_admin_id,
+            NEW.harvested_by,
+            '🌾 Farmer ' || v_farmer_name || ' recorded a new harvest of ' ||
+            NEW.quantity_kg || 'kg of ' || v_crop_name
+        );
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trg_notify_harvest
+AFTER INSERT ON harvests
+FOR EACH ROW
+EXECUTE FUNCTION notify_admin_harvest();
+
+-- ─────────────────────────────────────────────────────────
+
+-- TRIGGER 3: Notify admin when customer places an order
+CREATE OR REPLACE FUNCTION notify_admin_order()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_customer_name VARCHAR;
+    v_admin_id      INT;
+BEGIN
+    SELECT full_name INTO v_customer_name
+    FROM users WHERE user_id = NEW.customer_id;
+
+    FOR v_admin_id IN
+        SELECT user_id FROM users WHERE role = 'admin'
+    LOOP
+        INSERT INTO notifications (admin_id, triggered_by, message)
+        VALUES (
+            v_admin_id,
+            NEW.customer_id,
+            '🛒 Customer ' || v_customer_name || ' placed a new order on ' ||
+            NEW.order_date
+        );
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trg_notify_order
+AFTER INSERT ON orders
+FOR EACH ROW
+EXECUTE FUNCTION notify_admin_order();
+
+
+
+-- View 1: Farm production summary
+CREATE OR REPLACE VIEW vw_farm_production AS
+SELECT 
+    f.farm_name,
+    SUM(h.quantity_kg) AS total_harvest
+FROM farms f
+JOIN fields fi ON f.farm_id = fi.farm_id
+JOIN crops c ON fi.field_id = c.field_id
+JOIN harvests h ON c.crop_id = h.crop_id
+GROUP BY f.farm_name;
+
+-- View 2: Active alerts only
+CREATE OR REPLACE VIEW vw_active_alerts AS
+SELECT * FROM alerts
+WHERE alert_status = 'active';
+
+-- View 3: Irrigation summary per field
+CREATE OR REPLACE VIEW vw_irrigation_summary AS
+SELECT 
+    field_id,
+    SUM(water_amount) AS total_water_used,
+    COUNT(*) AS irrigation_sessions
+FROM irrigation
+GROUP BY field_id;
+
+
+ALTER VIEW vw_farm_production OWNER TO postgres;
+ALTER VIEW vw_active_alerts OWNER TO postgres;
+ALTER VIEW vw_irrigation_summary OWNER TO postgres;
+
+
+CREATE OR REPLACE FUNCTION get_active_alerts_count()
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count INT;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM alerts
+    WHERE alert_status = 'active';
+    RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_farm_total_harvest(p_farm_id INT)
+RETURNS DECIMAL
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_total DECIMAL := 0;
+BEGIN
+    SELECT COALESCE(SUM(h.quantity_kg), 0)
+    INTO v_total
+    FROM harvests h
+    JOIN crops c ON h.crop_id = c.crop_id
+    JOIN fields fi ON c.field_id = fi.field_id
+    WHERE fi.farm_id = p_farm_id;
+    RETURN v_total;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION cancel_customer_orders(p_customer_id INT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE orders SET status = 'cancelled'
+    WHERE customer_id = p_customer_id AND status = 'pending';
+END;
+$$;
